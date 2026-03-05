@@ -3,14 +3,14 @@ import hmac
 import logging
 import os
 import sqlite3
+from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from typing import Optional
 
-import bcrypt
 from flask import Flask, flash, redirect, render_template, request, session, url_for
 
 DB_PATH = "users.db"
-MAX_FAILED_ATTEMPTS = 5
+SCHEMA_PATH = Path("schema.sql")
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "change-this-in-production")
@@ -77,45 +77,15 @@ def log_auth_attempt(
 
 
 def init_db() -> None:
+    if not SCHEMA_PATH.exists():
+        raise FileNotFoundError(f"No se encontro el archivo de esquema: {SCHEMA_PATH}")
+
+    schema_sql = SCHEMA_PATH.read_text(encoding="utf-8")
+
     with get_db_connection() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY,
-                username TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                failed_attempts INTEGER DEFAULT 0,
-                is_locked BOOLEAN DEFAULT 0
-            )
-            """
-        )
+        conn.executescript(schema_sql)
         conn.commit()
 
-
-
-def seed_admin_user() -> None:
-    admin_username = "admin"
-    admin_password = "SecurePass123"
-
-    with get_db_connection() as conn:
-        user = conn.execute(
-            "SELECT id FROM users WHERE username = ?", (admin_username,)
-        ).fetchone()
-        if user:
-            return
-
-        hashed = bcrypt.hashpw(admin_password.encode("utf-8"), bcrypt.gensalt()).decode(
-            "utf-8"
-        )
-        try:
-            conn.execute(
-                "INSERT INTO users (username, password_hash) VALUES (?, ?)",
-                (admin_username, hashed),
-            )
-            conn.commit()
-        except sqlite3.IntegrityError:
-            # Safe fallback if another process inserted at same time.
-            conn.rollback()
 
 
 
@@ -133,15 +103,18 @@ def login():
     password = request.form.get("password", "")
 
     with get_db_connection() as conn:
-        user = conn.execute(
-            "SELECT id, username, password_hash, failed_attempts, is_locked FROM users WHERE username = ?",
-            (username,),
-        ).fetchone()
+        # WARNING: Intentionally vulnerable query for educational SQLi testing.
+        query = (
+            "SELECT id, username, failed_attempts, is_locked "
+            "FROM users "
+            f"WHERE username = '{username}' AND password_hash = '{password}'"
+        )
+        user = conn.execute(query).fetchone()
 
         if user is None:
             flash("Usuario o contraseña incorrectos.", "error")
             log_auth_attempt(
-                outcome="FAIL_UNKNOWN_USER",
+                outcome="FAIL_BAD_CREDENTIALS",
                 username=username,
                 attempts=None,
                 raw_password=password,
@@ -158,46 +131,16 @@ def login():
             )
             return render_template("login.html"), 403
 
-        password_ok = bcrypt.checkpw(
-            password.encode("utf-8"), user["password_hash"].encode("utf-8")
-        )
+        session["user_id"] = user["id"]
+        session["username"] = user["username"]
 
-        if password_ok:
-            conn.execute(
-                "UPDATE users SET failed_attempts = 0 WHERE id = ?",
-                (user["id"],),
-            )
-            conn.commit()
-
-            session["user_id"] = user["id"]
-            session["username"] = user["username"]
-
-            log_auth_attempt(
-                outcome="SUCCESS",
-                username=username,
-                attempts=0,
-                raw_password=password,
-            )
-            return redirect(url_for("dashboard"))
-
-        new_attempts = int(user["failed_attempts"]) + 1
-        should_lock = new_attempts >= MAX_FAILED_ATTEMPTS
-
-        # Lock is permanent unless changed manually in the DB.
-        conn.execute(
-            "UPDATE users SET failed_attempts = ?, is_locked = ? WHERE id = ?",
-            (new_attempts, int(should_lock), user["id"]),
-        )
-        conn.commit()
-
-        flash("Usuario o contraseña incorrectos.", "error")
         log_auth_attempt(
-            outcome="FAIL_BAD_CREDENTIALS",
+            outcome="SUCCESS",
             username=username,
-            attempts=new_attempts,
+            attempts=0,
             raw_password=password,
         )
-        return render_template("login.html"), 401
+        return redirect(url_for("dashboard"))
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -216,5 +159,4 @@ def logout():
 if __name__ == "__main__":
     setup_logging()
     init_db()
-    seed_admin_user()
     app.run(debug=False)

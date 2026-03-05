@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; }
+    form { max-width: 360px; display: grid; gap: 0.75rem; }
+    .msg { padding: 0.5rem; border-radius: 4px; margin-bottom: 1rem; }
+    .error { background: #ffe8e8; color: #7a0000; }
+  </style>
+</head>
+<body>
+  <h1>Iniciar sesión</h1>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="msg {{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <form method="post" action="{{ url_for('login') }}">
+    <label for="username">Usuario</label>
+    <input id="username" name="username" type="text" required>
+
+    <label for="password">Contraseña</label>
+    <input id="password" name="password" type="password" required>
+
+    <button type="submit">Entrar</button>
+  </form>
+</body>
+</html>
